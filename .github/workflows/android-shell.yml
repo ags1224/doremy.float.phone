@@ -14,12 +14,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 可选签名：仓库 Secrets 配置了 SHELL_KEYSTORE_BASE64 等四项时产出已签名 release
+    # 四项 Secrets 只在解码和构建步骤中注入；缺失或签名无效都会停止构建。
     env:
-      SHELL_KEYSTORE_BASE64: ${{ secrets.SHELL_KEYSTORE_BASE64 }}
-      SHELL_KEYSTORE_PASSWORD: ${{ secrets.SHELL_KEYSTORE_PASSWORD }}
-      SHELL_KEY_ALIAS: ${{ secrets.SHELL_KEY_ALIAS }}
-      SHELL_KEY_PASSWORD: ${{ secrets.SHELL_KEY_PASSWORD }}
       SHELL_SITE_URL: ${{ inputs.site_url || vars.SHELL_SITE_URL }}
     steps:
       - uses: actions/checkout@v4
@@ -35,23 +31,58 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
-      - name: Decode keystore (optional)
-        if: ${{ env.SHELL_KEYSTORE_BASE64 != '' }}
+      - name: Validate and decode release keystore
+        env:
+          SHELL_KEYSTORE_BASE64: ${{ secrets.SHELL_KEYSTORE_BASE64 }}
+          SHELL_KEYSTORE_PASSWORD: ${{ secrets.SHELL_KEYSTORE_PASSWORD }}
+          SHELL_KEY_ALIAS: ${{ secrets.SHELL_KEY_ALIAS }}
+          SHELL_KEY_PASSWORD: ${{ secrets.SHELL_KEY_PASSWORD }}
         run: |
-          echo "$SHELL_KEYSTORE_BASE64" | base64 -d > /tmp/shell.keystore
-          echo "SHELL_KEYSTORE_FILE=/tmp/shell.keystore" >> "$GITHUB_ENV"
+          set -euo pipefail
+          missing=0
+          for name in SHELL_KEYSTORE_BASE64 SHELL_KEYSTORE_PASSWORD SHELL_KEY_ALIAS SHELL_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required GitHub Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+          umask 077
+          keystore_file="$RUNNER_TEMP/shell-release.jks"
+          printf '%s' "$SHELL_KEYSTORE_BASE64" | base64 -d > "$keystore_file"
+          keytool -list -keystore "$keystore_file" -storepass "$SHELL_KEYSTORE_PASSWORD" -alias "$SHELL_KEY_ALIAS" >/dev/null
+          echo "SHELL_KEYSTORE_FILE=$keystore_file" >> "$GITHUB_ENV"
 
       - name: Build APKs
+        env:
+          SHELL_KEYSTORE_PASSWORD: ${{ secrets.SHELL_KEYSTORE_PASSWORD }}
+          SHELL_KEY_ALIAS: ${{ secrets.SHELL_KEY_ALIAS }}
+          SHELL_KEY_PASSWORD: ${{ secrets.SHELL_KEY_PASSWORD }}
         run: gradle -p android-shell assembleDebug assembleRelease
+
+      - name: Verify release APK signature
+        run: |
+          set -euo pipefail
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [ -z "$apksigner" ]; then
+            echo "::error::Android SDK apksigner was not found"
+            exit 1
+          fi
+          "$apksigner" verify --verbose android-shell/app/build/outputs/apk/release/app-release.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: float-shell-debug
           path: android-shell/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
           name: float-shell-release
-          path: android-shell/app/build/outputs/apk/release/*.apk
+          path: android-shell/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error

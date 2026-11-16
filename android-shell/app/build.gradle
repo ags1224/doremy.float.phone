@@ -3,9 +3,17 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
-// 签名：CI 里通过环境变量注入 keystore（见 android-shell/README.md）；
-// 没有配置时 release 构建产出未签名 APK，debug 构建始终可直接安装测试。
+// 签名：CI 通过环境变量注入 keystore，且 release 必须使用正式签名。
+// 本地只构建 debug 时无需配置；配置任一签名变量时则必须配置完整。
 def ksFile = System.getenv("SHELL_KEYSTORE_FILE")
+def ksPassword = System.getenv("SHELL_KEYSTORE_PASSWORD")
+def ksAlias = System.getenv("SHELL_KEY_ALIAS")
+def ksKeyPassword = System.getenv("SHELL_KEY_PASSWORD")
+def hasSigningConfig = [ksFile, ksPassword, ksAlias, ksKeyPassword].every { it }
+def hasAnySigningConfig = [ksFile, ksPassword, ksAlias, ksKeyPassword].any { it }
+if (hasAnySigningConfig && !hasSigningConfig) {
+    throw new GradleException("Incomplete APK signing configuration: set SHELL_KEYSTORE_FILE, SHELL_KEYSTORE_PASSWORD, SHELL_KEY_ALIAS and SHELL_KEY_PASSWORD")
+}
 def siteUrl = (System.getenv("SHELL_SITE_URL") ?: "https://example.invalid").replaceAll('/+$', '')
 
 android {
@@ -33,13 +41,13 @@ android {
 
     buildFeatures { buildConfig true }
 
-    if (ksFile) {
-        signingConfigs {
-            release {
+    signingConfigs {
+        release {
+            if (hasSigningConfig) {
                 storeFile file(ksFile)
-                storePassword System.getenv("SHELL_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("SHELL_KEY_ALIAS")
-                keyPassword System.getenv("SHELL_KEY_PASSWORD")
+                storePassword ksPassword
+                keyAlias ksAlias
+                keyPassword ksKeyPassword
             }
         }
     }
@@ -47,7 +55,8 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            if (ksFile) signingConfig signingConfigs.release
+            // 始终绑定 release 签名；缺少配置时构建失败，不生成未签名正式包。
+            signingConfig signingConfigs.release
         }
         debug {
             // 有固定签名时 debug 也用同一把钥匙。
@@ -55,7 +64,7 @@ android {
             // 签名一变就只能卸载重装，App 数据（WebView 沙盒里的聊天记录、
             // 角色卡）会一起丢。统一签名后 debug / release 两个包可以互相
             // 覆盖安装，选哪个都不会再触发「应用未安装」。
-            if (ksFile) signingConfig signingConfigs.release
+            if (hasSigningConfig) signingConfig signingConfigs.release
         }
     }
     compileOptions {

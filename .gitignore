@@ -28,3 +28,11 @@ tools/weixin-local-assistant/config.txt
 *.ts.net.crt
 *.ts.net.key
 /public/models/world-builder/
+
+# Android signing material must never be committed
+*.jks
+*.keystore
+/apk-signing/
+/android-shell/.gradle/
+/android-shell/build/
+/android-shell/app/build/

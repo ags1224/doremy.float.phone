@@ -19,8 +19,8 @@
 1. 在自己的 GitHub 仓库打开 **Settings → Secrets and variables → Actions → Variables**，新建变量 `SHELL_SITE_URL`，值填写你自己的 HTTPS 站点地址。手动运行工作流时也可以临时填写 `site_url`，它会覆盖仓库变量。
 2. 打开仓库 **Actions → Build Android Shell APK → Run workflow**，选择要构建的分支并运行。（自动触发规则以工作流文件中的配置为准。）
 3. 构建结束后，在该次运行页面底部的 **Artifacts** 下载：
-   - `float-shell-debug`：通常可以直接安装，适合测试；如果没有配置自己的密钥，它使用 GitHub Actions 本次运行生成的临时 debug 签名，不能保证后续构建仍可覆盖安装。
-   - `float-shell-release`：只有配置好下面的个人签名密钥后，才会生成可用于长期分发的已签名 release APK。未配置时不要把它当作可安装的正式包。
+   - `float-shell-debug`：适合测试，CI 中与 Release 使用同一把个人密钥，后续构建可以覆盖安装。
+   - `float-shell-release`：使用下面配置的个人签名密钥生成的正式 APK。工作流会检查四项 Secret 是否完整，并在上传前验证 Release APK 签名；缺少任何一项都会停止构建，不会上传未签名的正式包。
 
 ## 配置自己的 APK 签名（推荐长期使用或分享 APK 时设置）
 
@@ -31,7 +31,7 @@
 电脑需要安装 JDK（含 `keytool`）。在终端运行：
 
 ```bash
-keytool -genkeypair -v -keystore shell-release.jks -alias floatshell -keyalg RSA -keysize 2048 -validity 10000
+keytool -genkeypair -v -storetype JKS -keystore shell-release.jks -alias floatshell -keyalg RSA -keysize 3072 -validity 10000
 ```
 
 按提示设置并妥善保存密钥库密码、密钥密码和别名。示例别名是 `floatshell`。请把生成的 `shell-release.jks` 和密码保存在安全位置，并另外做一份加密备份；不要上传到 GitHub 仓库。
@@ -68,12 +68,8 @@ base64 < shell-release.jks | tr -d '\n'
 ### 第四步：重新构建并验证
 
 1. 重新运行 **Build Android Shell APK** 工作流。
-2. 检查日志中是否成功执行 `Decode keystore (optional)`，并确认后续 APK 构建成功。
-3. 下载 `float-shell-release`，用 Android SDK Build Tools 提供的 `apksigner` 验证：
-   ```bash
-   apksigner verify --verbose --print-certs app-release.apk
-   ```
-   输出应包含证书信息。若要确认不同版本能互相覆盖更新，还应比较各次 APK 的证书指纹是否一致。
+2. 确认 `Validate and decode release keystore`、`Build APKs` 和 `Verify release APK signature` 三步成功；工作流不会打印密钥内容或密码。
+3. 在该次运行页面底部的 **Artifacts** 下载 `float-shell-release`。工作流已自动用 Android SDK 的 `apksigner` 验证签名，无需在本机安装验证工具。
 
 请始终保留原始密钥库和密码。配置完成后，后续 release 构建都使用这把密钥；不要为了更新 APK 随意重新生成密钥。
 
